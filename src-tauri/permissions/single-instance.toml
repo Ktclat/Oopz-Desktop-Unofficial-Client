@@ -1,0 +1,10 @@
+# src-tauri/permissions/single-instance.toml
+[[permission]]
+identifier = "allow-global"
+description = "允许单实例插件接收其他实例的启动指令"
+
+# 注意这里的括号：必须是 [["..."]]，双层中括号
+commands = [["single-instance:allow-global"]]
+
+[[scope]]
+identifier = "default"

@@ -1,0 +1,16 @@
+# 依赖目录
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+target/
+
+# 编译产物
+dist/
+bin/
+*.exe
+*.msi
+
+# 系统与日志
+.DS_Store
+*.log
+.env
