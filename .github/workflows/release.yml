@@ -1,0 +1,130 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Select Windows x64 MSVC toolchain
+        run: rustup default stable-x86_64-pc-windows-msvc
+
+      - name: Check tag, package versions and release notes
+        shell: python
+        run: |
+          import json, os, re, subprocess
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"]
+          if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
+              raise SystemExit(f"Expected a stable vMAJOR.MINOR.PATCH tag, got {tag!r}")
+          def read_json(path):
+              return json.loads(Path(path).read_text(encoding="utf-8"))
+          lock = read_json("package-lock.json")
+          cargo = json.loads(subprocess.check_output([
+              "cargo", "metadata", "--manifest-path", "src-tauri/Cargo.toml",
+              "--locked", "--no-deps", "--format-version", "1",
+          ]))
+          versions = {
+              "package.json": read_json("package.json")["version"],
+              "package-lock.json": lock["version"],
+              "npm root package": lock["packages"][""]["version"],
+              "tauri.conf.json": read_json("src-tauri/tauri.conf.json")["version"],
+              "Cargo.toml": next(p["version"] for p in cargo["packages"] if p["name"] == "oopz"),
+          }
+          for source, version in versions.items():
+              if version != tag[1:]:
+                  raise SystemExit(f"{source} has {version}, expected {tag[1:]}")
+          if not Path(f"releases/{tag}.md").read_text(encoding="utf-8").strip():
+              raise SystemExit("Release notes are empty")
+
+      - run: npm ci
+      - run: node --test "tests/*.test.mjs"
+      - name: Build NSIS and MSI installers
+        run: npm run tauri build -- --ci --bundles nsis,msi -- --locked
+
+      - name: Collect installers and create portable ZIP
+        shell: python
+        run: |
+          import os, shutil
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          name = f"oopz_{os.environ['RELEASE_TAG'][1:]}_x64"
+          root = Path("src-tauri/target/release")
+          out = Path("release-assets")
+          out.mkdir(exist_ok=True)
+          for pattern, suffix in [("nsis/*-setup.exe", "-setup.exe"), ("msi/*.msi", ".msi")]:
+              files = list((root / "bundle").glob(pattern))
+              if len(files) != 1:
+                  raise SystemExit(f"Expected one {pattern}, found {files}")
+              shutil.copyfile(files[0], out / (name + suffix))
+          with ZipFile(out / (name + "-portable.zip"), "w", ZIP_DEFLATED) as package:
+              package.write(root / "oopz.exe", "oopz.exe")
+              loader = root / "WebView2Loader.dll"
+              if loader.is_file():
+                  package.write(loader, loader.name)
+              package.write("LICENSE", "LICENSE")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: release-assets/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: release-assets
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Oopz Desktop $RELEASE_TAG"
+          notes="releases/$RELEASE_TAG.md"
+          if state=$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'); then
+            if [[ "$state" == false ]]; then
+              # A completed rerun must leave published downloads intact.
+              gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort > "$RUNNER_TEMP/published"
+              find release-assets -type f -printf '%f\n' | sort > "$RUNNER_TEMP/expected"
+              diff -u "$RUNNER_TEMP/expected" "$RUNNER_TEMP/published"
+              exit 0
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$title" --notes-file "$notes"
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          gh release edit "$RELEASE_TAG" --title "$title" --notes-file "$notes" --draft=false
