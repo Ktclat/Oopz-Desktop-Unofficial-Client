@@ -4,23 +4,67 @@ on:
   push:
     tags:
       - 'v*'
+    branches: [main]
+    paths: ['.github/workflows/release.yml']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
-env:
-  RELEASE_TAG: ${{ github.ref_name }}
-
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.select.outputs.tag }}
+      commit: ${{ steps.select.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: select
+        name: Resolve the immutable release source
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            # Reconcile an existing tag when the workflow itself is installed or repaired.
+            tag="v$(jq -r .version package.json)"
+          fi
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          if ! git show-ref --verify --quiet "refs/tags/$tag"; then
+            if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == branch ]]; then
+              echo "Waiting for $tag to be pushed"
+              exit 0
+            fi
+            echo "Tag $tag does not exist" >&2
+            exit 1
+          fi
+          commit=$(git rev-parse "refs/tags/${tag}^{commit}")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: resolve
+    if: needs.resolve.outputs.tag != ''
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.resolve.outputs.commit }}
           persist-credentials: false
 
       - uses: actions/setup-node@v4
@@ -95,13 +139,19 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [resolve, build]
+    concurrency:
+      group: publish-${{ needs.resolve.outputs.tag }}
+      cancel-in-progress: false
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.resolve.outputs.commit }}
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:

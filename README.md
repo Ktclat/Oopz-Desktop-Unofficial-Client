@@ -88,7 +88,7 @@ npm run tauri dev
 
 稳定版沿用 `v主版本.次版本.修订号` 标签和 `Oopz Desktop v主版本.次版本.修订号` 标题。发布前同步 npm、Cargo 和 Tauri 的版本及锁文件，在 `releases/<标签>.md` 写好中文更新说明，再将提交及对应标签推送到 GitHub。
 
-标签触发 **Windows release** 工作流。Windows x64 runner 运行测试、生成 NSIS 和 MSI 安装包，并打包便携 ZIP。工作流上传全部文件后公开 Release。失败时可在 Actions 页面重新运行该次任务。
+标签触发 **Windows release** 工作流。Windows x64 runner 运行测试、生成 NSIS 和 MSI 安装包，并打包便携 ZIP。工作流上传全部文件后公开 Release。失败时可在 Actions 页面重新运行该次任务，也可选择 **Run workflow** 并填写已有标签。更新发布工作流时也会核对当前版本的标签。所有构建均检出该标签对应的提交。
 
 ## ⚠️ 免责声明 (Disclaimer) 
 本项目为 Oopz 的第三方非官方客户端，仅供学习 Tauri 框架及个人使用。 
