@@ -53,12 +53,30 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class OopzMenu {
+    private delegate bool VisitWindow(IntPtr window, IntPtr state);
+    [DllImport("user32")] static extern bool EnumWindows(VisitWindow visitor, IntPtr state);
+    [DllImport("user32")] static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32")] static extern IntPtr GetMenu(IntPtr window);
     [DllImport("user32")] static extern IntPtr GetSubMenu(IntPtr menu, int position);
     [DllImport("user32")] static extern int GetMenuItemCount(IntPtr menu);
     [DllImport("user32")] static extern uint GetMenuItemID(IntPtr menu, int position);
     [DllImport("user32", CharSet=CharSet.Unicode)] static extern int GetMenuString(IntPtr menu, uint item, StringBuilder text, int size, uint flags);
     [DllImport("user32")] static extern bool PostMessageW(IntPtr window, uint message, UIntPtr command, IntPtr data);
+    public static IntPtr FindMainWindow(int processId) {
+        // Process.MainWindowHandle can return Tauri's single-instance message window.
+        // The user-facing Oopz window has the app menu attached.
+        var found = IntPtr.Zero;
+        EnumWindows((window, state) => {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner != processId || !IsWindowVisible(window) || GetMenu(window) == IntPtr.Zero)
+                return true;
+            found = window;
+            return false;
+        }, IntPtr.Zero);
+        return found;
+    }
     public static void UnloadPage(IntPtr window) {
         var menu = GetSubMenu(GetMenu(window), 0);
         for (int i = 0; i < GetMenuItemCount(menu); i++) {
@@ -81,7 +99,7 @@ function Wait-ForActivation($primary, $second) {
         $primary.Refresh()
         if ($primary.HasExited) { throw 'The original tray instance exited during activation.' }
         if ($second.HasExited -and $second.ExitCode -ne 0) { throw "Second launch failed with code $($second.ExitCode)." }
-        $ready = $second.HasExited -and $primary.MainWindowHandle -ne [IntPtr]::Zero -and (Test-WebViewDescendant $primary.Id)
+        $ready = $second.HasExited -and ([OopzMenu]::FindMainWindow($primary.Id)) -ne [IntPtr]::Zero -and (Test-WebViewDescendant $primary.Id)
         if ($ready) { break }
         Start-Sleep -Milliseconds 400
     } while ($clock.Elapsed.TotalSeconds -lt 60)
@@ -97,8 +115,8 @@ try {
         $primary.Refresh()
         if ($primary.HasExited) { throw "Tray instance exited early with code $($primary.ExitCode)." }
         $hasBrowser = Test-WebViewDescendant $primary.Id
-        if ($primary.MainWindowHandle -ne [IntPtr]::Zero -or $hasBrowser) {
-            throw "Tray-only startup unexpectedly created a window or runtime. Window='$($primary.MainWindowTitle)', HWND=$($primary.MainWindowHandle), WebView2=$hasBrowser."
+        if (([OopzMenu]::FindMainWindow($primary.Id)) -ne [IntPtr]::Zero -or $hasBrowser) {
+            throw "Tray-only startup unexpectedly created a window or runtime. Window='$($primary.MainWindowTitle)', HWND=$(([OopzMenu]::FindMainWindow($primary.Id))), WebView2=$hasBrowser."
         }
         Start-Sleep -Milliseconds 250
     } while ($clock.Elapsed.TotalSeconds -lt 8)
@@ -112,12 +130,12 @@ try {
     Wait-ForActivation $primary $second
     $second.Dispose()
     $second = $null
-    [OopzMenu]::UnloadPage($primary.MainWindowHandle)
+    [OopzMenu]::UnloadPage(([OopzMenu]::FindMainWindow($primary.Id)))
     $clock.Restart()
     do {
         $primary.Refresh()
         if ($primary.HasExited) { throw 'Unloading the webpage exited the tray process.' }
-        $idle = $primary.MainWindowHandle -eq [IntPtr]::Zero -and -not (Test-WebViewDescendant $primary.Id)
+        $idle = ([OopzMenu]::FindMainWindow($primary.Id)) -eq [IntPtr]::Zero -and -not (Test-WebViewDescendant $primary.Id)
         if ($idle) { break }
         Start-Sleep -Milliseconds 400
     } while ($clock.Elapsed.TotalSeconds -lt 60)
