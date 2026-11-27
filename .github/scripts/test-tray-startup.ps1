@@ -96,8 +96,9 @@ try {
     do {
         $primary.Refresh()
         if ($primary.HasExited) { throw "Tray instance exited early with code $($primary.ExitCode)." }
-        if ($primary.MainWindowHandle -ne [IntPtr]::Zero -or (Test-WebViewDescendant $primary.Id)) {
-            throw 'Tray-only startup unexpectedly created a visible main window or WebView2 process.'
+        $hasBrowser = Test-WebViewDescendant $primary.Id
+        if ($primary.MainWindowHandle -ne [IntPtr]::Zero -or $hasBrowser) {
+            throw "Tray-only startup unexpectedly created a window or runtime. Window='$($primary.MainWindowTitle)', HWND=$($primary.MainWindowHandle), WebView2=$hasBrowser."
         }
         Start-Sleep -Milliseconds 250
     } while ($clock.Elapsed.TotalSeconds -lt 8)
@@ -126,6 +127,13 @@ try {
     $result = 'Passed tray-only startup, activation, menu-driven unload and reactivation of the same Oopz process.'
     Write-Output $result
     if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $result }
+} catch {
+    if ($env:GITHUB_ACTIONS) {
+        $detail = ("{0} (line {1})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber)
+        $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+        Write-Output "::error title=Tray smoke test::$detail"
+    }
+    throw
 } finally {
     foreach ($process in @($second, $primary)) {
         if ($null -eq $process) { continue }
