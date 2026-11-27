@@ -1,0 +1,96 @@
+name: Native Windows preview
+
+on:
+  push:
+    branches: ['native/**']
+    tags: ['native-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build native Windows client
+        run: msbuild native-windows/Oopz.Native.csproj /t:Build /p:Configuration=Release /m /nologo
+      - name: Check capture parser
+        shell: powershell
+        run: ./native-windows/tests/test-capture.ps1 -AssemblyPath ./native-windows/bin/Release/Oopz.Native.exe
+      - name: Verify native prerelease version and notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:TAG -cnotmatch '^native-v((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)-alpha\.[1-9][0-9]*)$') {
+            throw 'Expected native-vMAJOR.MINOR.PATCH-alpha.N'
+          }
+          $expected = $Matches[1]
+          $actual = (Get-Item 'native-windows/bin/Release/Oopz.Native.exe').VersionInfo.ProductVersion
+          if ($actual -cne $expected) { throw "Executable product version $actual differs from tag $expected." }
+          if (-not (Get-Content -LiteralPath "releases/$env:TAG.md" -Raw).Trim()) { throw 'Missing prerelease notes.' }
+      - name: Collect portable files
+        shell: pwsh
+        run: |
+          $out = New-Item -ItemType Directory (Join-Path $env:RUNNER_TEMP 'native-package')
+          $exe = 'native-windows/bin/Release/Oopz.Native.exe'
+          Copy-Item -LiteralPath $exe, 'LICENSE' -Destination $out
+          if (Test-Path -LiteralPath "$exe.config") {
+            Copy-Item -LiteralPath "$exe.config" -Destination $out
+          }
+      - name: Check packaged desktop client
+        shell: powershell
+        run: ./.github/scripts/test-native-windows.ps1 -ExePath (Join-Path $env:RUNNER_TEMP 'native-package/Oopz.Native.exe')
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Oopz-Native-Windows-x64-preview
+          path: ${{ runner.temp }}/native-package/
+          if-no-files-found: error
+
+  publish-prerelease:
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/native-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v5
+        with:
+          name: Oopz-Native-Windows-x64-preview
+          path: package
+      - name: Publish native preview
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#native-v}"
+          title="Oopz Desktop v${version}（原生预览版）"
+          asset="oopz_${version}_x64-native-portable.zip"
+          (cd package && zip -q "$RUNNER_TEMP/$asset" ./*)
+          if state=$(gh release view "$TAG" --json isDraft --jq '.isDraft'); then
+            if [[ "$state" == false ]]; then
+              gh release view "$TAG" --json isPrerelease,assets --jq '.isPrerelease, .assets[].name' > "$RUNNER_TEMP/published"
+              diff -u <(printf '%s\n' true "$asset") "$RUNNER_TEMP/published"
+              exit 0
+            fi
+          else
+            gh release create "$TAG" --draft --prerelease --latest=false --verify-tag --title "$title" --notes-file "releases/$TAG.md"
+          fi
+          gh release upload "$TAG" "$RUNNER_TEMP/$asset" --clobber
+          gh release edit "$TAG" --prerelease --latest=false --title "$title" --notes-file "releases/$TAG.md" --draft=false

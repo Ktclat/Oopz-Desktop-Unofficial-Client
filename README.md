@@ -16,6 +16,18 @@
 
 ---
 
+## Windows 原生预览版
+
+原生分支提供独立的 Windows x64 程序 `Oopz.Native.exe`。窗口、频道列表、消息和麦克风自检由 WPF 与 Windows 音频接口实现。解压便携包即可运行，需要 Windows 10/11 和 .NET Framework 4.8。[原生版发布记录](https://github.com/Ktclat/Oopz-Desktop-Unofficial-Client/releases/tag/native-v0.3.0-alpha.1)
+
+- **已有本机 Oopz 适配器**。启动一个已获账号授权、已登录且同时启用 HTTP 与正向 WebSocket 的 OneBot v11 服务，点「连接适配器…」，输入本机端口和适配器令牌。默认端口为 6700。选中频道即可收发文字，Enter 发送。「断开连接」和关闭程序都会断开事件流。令牌仅在当前进程中使用。可见频道和发言身份由适配器账号决定。最近记录来自适配器的事件缓存。[适配器接口](https://github.com/tangqingfeng7/Oopzbot-SDK/blob/25df9629157ccdf11c540de1554acfd3a8c06314/docs/adapters/onebot/v11.md)
+- **核对网页版接口数据**。在自己的官方网页会话中打开开发者工具的 Network 面板，再打开已加入的域和文字频道，选择导出经过净化且包含响应正文的 HAR。在原生客户端点「打开网页记录…」，可离线查看其中的域、频道和文字。只读取匹配的 Oopz API 响应，原文件留在本机。HAR 可能包含私人聊天，请仅在本机使用。此模式只读。
+- **麦克风自检**。点「麦克风自检…」，选择设备并开始。可以观察输入电平，随时停止，10 秒后会自动释放输入设备。
+
+**个人账号直接登录与语音**。公开的社区实现记录了登录请求签名和按房间取得语音授权的流程，公开构建使用占位材料。当前原生预览版提供适配器文字收发及本机音频测试。个人账号直登、Oopz 房间通话仍待可验证的接入授权及真实服务联调。[鸿蒙原生实现说明](https://github.com/real-LEONEAST/OopzHM/blob/54b1de9315b6402a66f63e80a8ce7b98da9b98cc/README.md)
+
+Windows 安装 Visual Studio 的「.NET 桌面开发」工作负载和 .NET Framework 4.8 Targeting Pack 后，运行 `msbuild native-windows/Oopz.Native.csproj /p:Configuration=Release` 即可生成客户端。原生分支的 Actions 在 Windows 桌面测试启动、麦克风窗口、频道收发和关闭流程；原生预览标签采用 `native-v主.次.修订-alpha.序号`。
+
 ## ✨ 主要特性 (Features)
 
 相比直接使用浏览器网页版，本客户端提供了以下**原生级增强体验**：
