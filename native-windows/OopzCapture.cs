@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -223,7 +224,7 @@ namespace Oopz.Native
 
         bool ReadAreas(object payload)
         {
-            var list = (payload as object[]) ?? (Value(payload, "areas") as object[]);
+            var list = (payload as IList) ?? (Value(payload, "areas") as IList);
             if (list == null) return false;
             foreach (var item in list)
             {
@@ -238,12 +239,12 @@ namespace Oopz.Native
 
         bool ReadChannels(string areaId, object payload)
         {
-            var groups = payload as object[];
+            var groups = payload as IList;
             if (groups == null) return false;
             var area = Area(areaId);
             foreach (var group in groups)
             {
-                var list = Value(group, "channels") as object[];
+                var list = Value(group, "channels") as IList;
                 if (list == null) continue;
                 foreach (var item in list)
                 {
@@ -262,7 +263,7 @@ namespace Oopz.Native
 
         bool ReadHistory(string areaId, string channelId, object payload)
         {
-            var list = Value(payload, "messages") as object[];
+            var list = Value(payload, "messages") as IList;
             if (list == null) return false;
             var channel = Channel(Area(areaId), channelId);
             var messages = history[channel];
