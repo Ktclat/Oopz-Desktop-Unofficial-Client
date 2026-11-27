@@ -79,6 +79,7 @@ function Test-WebViewDescendant([int] $RootId) {
 # Exercise the command bound to the actual native menu without relying on screen coordinates.
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class OopzMenu {
@@ -86,57 +87,83 @@ public static class OopzMenu {
     [DllImport("user32")] static extern bool EnumWindows(VisitWindow visitor, IntPtr state);
     [DllImport("user32")] static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder text, int size);
+    [DllImport("user32", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int size);
     [DllImport("user32")] static extern IntPtr GetMenu(IntPtr window);
     [DllImport("user32")] static extern IntPtr GetSubMenu(IntPtr menu, int position);
     [DllImport("user32")] static extern int GetMenuItemCount(IntPtr menu);
     [DllImport("user32")] static extern uint GetMenuItemID(IntPtr menu, int position);
     [DllImport("user32", CharSet=CharSet.Unicode)] static extern int GetMenuString(IntPtr menu, uint item, StringBuilder text, int size, uint flags);
     [DllImport("user32")] static extern bool PostMessageW(IntPtr window, uint message, UIntPtr command, IntPtr data);
-    public static IntPtr FindMainWindow(int processId) {
-        // Process.MainWindowHandle can return Tauri's single-instance message window.
-        // The user-facing Oopz window has the app menu attached.
-        var found = IntPtr.Zero;
+    private static List<IntPtr> Windows(int processId) {
+        var result = new List<IntPtr>();
         EnumWindows((window, state) => {
             uint owner;
             GetWindowThreadProcessId(window, out owner);
-            if (owner != processId || !IsWindowVisible(window) || GetMenu(window) == IntPtr.Zero)
-                return true;
-            found = window;
-            return false;
+            if (owner == processId) result.Add(window);
+            return true;
         }, IntPtr.Zero);
-        return found;
+        return result;
     }
-    public static void UnloadPage(IntPtr window) {
-        var menu = GetSubMenu(GetMenu(window), 0);
+    private static string ClassName(IntPtr window) {
+        var text = new StringBuilder(128);
+        GetClassName(window, text, text.Capacity);
+        return text.ToString();
+    }
+    public static IntPtr FindWindow(int processId, string className, bool visibleOnly) {
+        // Tauri also creates a zero-size single-instance message window.
+        foreach (var window in Windows(processId))
+            if ((!visibleOnly || IsWindowVisible(window)) && ClassName(window) == className)
+                return window;
+        return IntPtr.Zero;
+    }
+    public static string Describe(int processId) {
+        var result = new List<string>();
+        foreach (var window in Windows(processId)) {
+            var title = new StringBuilder(128);
+            GetWindowText(window, title, title.Capacity);
+            result.Add($"HWND={window} '{ClassName(window)}' '{title}' visible={IsWindowVisible(window)} menu={GetMenu(window)}");
+        }
+        return string.Join(" | ", result);
+    }
+    public static uint UnloadCommand(IntPtr window) {
+        var bar = GetMenu(window);
+        if (bar == IntPtr.Zero) return 0;
+        var menu = GetSubMenu(bar, 0);
         for (int i = 0; i < GetMenuItemCount(menu); i++) {
             var name = new StringBuilder(128);
             GetMenuString(menu, (uint)i, name, name.Capacity, 0x400); // MF_BYPOSITION
-            if (name.ToString() == "断开会话并卸载网页") {
-                if (!PostMessageW(window, 0x111, (UIntPtr)GetMenuItemID(menu,i), IntPtr.Zero))
-                    throw new InvalidOperationException("Could not invoke the Oopz menu command.");
-                return;
-            }
+            if (name.ToString() == "断开会话并卸载网页")
+                return GetMenuItemID(menu, i);
         }
-        throw new InvalidOperationException("Unload command was missing from the main window menu.");
+        return 0;
+    }
+    public static void UnloadPage(IntPtr window) {
+        uint command = UnloadCommand(window);
+        if (command == 0 || !PostMessageW(window, 0x111, (UIntPtr)command, IntPtr.Zero))
+            throw new InvalidOperationException("Could not invoke the Oopz menu command.");
+    }
+    public static void CloseToTray(IntPtr window) {
+        if (!PostMessageW(window, 0x0010, UIntPtr.Zero, IntPtr.Zero)) // WM_CLOSE
+            throw new InvalidOperationException("Could not close the Oopz window.");
     }
 }
 '@
 
-function Wait-ForActivation($primary, $second) {
+function Wait-ForActivation($primary, $second, [string] $stage) {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     do {
         $primary.Refresh()
-        if ($primary.HasExited) { throw 'The original tray instance exited during activation.' }
+        if ($primary.HasExited) { throw "The original tray instance exited during $stage." }
         if ($second.HasExited -and $second.ExitCode -ne 0) { throw "Second launch failed with code $($second.ExitCode)." }
-        $ready = $second.HasExited -and ([OopzMenu]::FindMainWindow($primary.Id)) -ne [IntPtr]::Zero -and (Test-WebViewDescendant $primary.Id)
-        if ($ready) { break }
+        $window = [OopzMenu]::FindWindow($primary.Id, 'Tauri Window', $true)
+        $command = if ($window -ne [IntPtr]::Zero) { [OopzMenu]::UnloadCommand($window) } else { 0 }
+        if ($second.HasExited -and $command -ne 0 -and (Test-WebViewDescendant $primary.Id)) { return $window }
+        if (([OopzMenu]::FindWindow($primary.Id, '#32770', $true)) -ne [IntPtr]::Zero) { break }
         Start-Sleep -Milliseconds 400
     } while ($clock.Elapsed.TotalSeconds -lt 60)
-    if (-not $ready) {
-        $browser = Test-WebViewDescendant $primary.Id
-        $window = [OopzMenu]::FindMainWindow($primary.Id)
-        throw "Activation timed out. SecondExited=$($second.HasExited), MenuWindow=$window, Browser=$browser, Title='$($primary.MainWindowTitle)', Runtime=$runtimeVersion."
-    }
+    $browser = Test-WebViewDescendant $primary.Id
+    throw "Failed $stage. SecondExited=$($second.HasExited), MainWindow=$window, UnloadCommand=$command, Browser=$browser, Runtime=$runtimeVersion. $([OopzMenu]::Describe($primary.Id))"
 }
 
 $primary = $null
@@ -148,8 +175,10 @@ try {
         $primary.Refresh()
         if ($primary.HasExited) { throw "Tray instance exited early with code $($primary.ExitCode)." }
         $hasBrowser = Test-WebViewDescendant $primary.Id
-        if (([OopzMenu]::FindMainWindow($primary.Id)) -ne [IntPtr]::Zero -or $hasBrowser) {
-            throw "Tray-only startup unexpectedly created a window or runtime. Window='$($primary.MainWindowTitle)', HWND=$(([OopzMenu]::FindMainWindow($primary.Id))), WebView2=$hasBrowser."
+        $window = [OopzMenu]::FindWindow($primary.Id, 'Tauri Window', $false)
+        $dialog = [OopzMenu]::FindWindow($primary.Id, '#32770', $true)
+        if ($window -ne [IntPtr]::Zero -or $dialog -ne [IntPtr]::Zero -or $hasBrowser) {
+            throw "Tray-only startup unexpectedly created a window or runtime. WebView2=$hasBrowser. $([OopzMenu]::Describe($primary.Id))"
         }
         Start-Sleep -Milliseconds 250
     } while ($clock.Elapsed.TotalSeconds -lt 8)
@@ -161,22 +190,46 @@ try {
     if ($env:GITHUB_ACTIONS) { Write-Output "::notice title=Tray check::$result" }
     if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $result }
     $second = Start-Oopz
-    Wait-ForActivation $primary $second
+    $window = Wait-ForActivation $primary $second 'first activation'
     $second.Dispose()
     $second = $null
-    [OopzMenu]::UnloadPage(([OopzMenu]::FindMainWindow($primary.Id)))
+    [OopzMenu]::CloseToTray($window)
+    $clock.Restart()
+    do {
+        $primary.Refresh()
+        if ($primary.HasExited) { throw 'Closing the window exited the tray process.' }
+        $visible = [OopzMenu]::FindWindow($primary.Id, 'Tauri Window', $true)
+        if ($visible -eq [IntPtr]::Zero) { break }
+        Start-Sleep -Milliseconds 250
+    } while ($clock.Elapsed.TotalSeconds -lt 15)
+    $retained = [OopzMenu]::FindWindow($primary.Id, 'Tauri Window', $false)
+    if ($visible -ne [IntPtr]::Zero -or $retained -ne $window -or -not (Test-WebViewDescendant $primary.Id)) {
+        throw "Closing did not keep the same hidden window and WebView2 session. $([OopzMenu]::Describe($primary.Id))"
+    }
+    $second = Start-Oopz
+    $restored = Wait-ForActivation $primary $second 'restore after close-to-tray'
+    if ($restored -ne $window) { throw 'Restoring after close-to-tray replaced the original window.' }
+    $second.Dispose()
+    $second = $null
+    [OopzMenu]::UnloadPage($window)
     $clock.Restart()
     do {
         $primary.Refresh()
         if ($primary.HasExited) { throw 'Unloading the webpage exited the tray process.' }
-        $idle = ([OopzMenu]::FindMainWindow($primary.Id)) -eq [IntPtr]::Zero -and -not (Test-WebViewDescendant $primary.Id)
+        $idle = ([OopzMenu]::FindWindow($primary.Id, 'Tauri Window', $false)) -eq [IntPtr]::Zero -and -not (Test-WebViewDescendant $primary.Id)
         if ($idle) { break }
         Start-Sleep -Milliseconds 400
     } while ($clock.Elapsed.TotalSeconds -lt 60)
-    if (-not $idle) { throw 'Unloading did not release the window and private-profile WebView2 tree.' }
+    if (-not $idle) { throw "Unloading did not release the window and private-profile WebView2 tree. $([OopzMenu]::Describe($primary.Id))" }
+    $primary.Refresh()
+    $privateMiB = [math]::Round($primary.PrivateMemorySize64 / 1MB, 1)
+    $result = "After menu-driven unload: no main window or sampled WebView2 processes, Oopz private memory $privateMiB MiB."
+    Write-Output $result
+    if ($env:GITHUB_ACTIONS) { Write-Output "::notice title=Tray check::$result" }
+    if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $result }
     $second = Start-Oopz
-    Wait-ForActivation $primary $second
-    $result = 'Passed tray-only startup, activation, menu-driven unload and reactivation of the same Oopz process.'
+    $null = Wait-ForActivation $primary $second 'reactivation after unload'
+    $result = 'Passed tray-only startup, activation, close-to-tray with the same window restored, menu-driven unload and reactivation of the same Oopz process.'
     Write-Output $result
     if ($env:GITHUB_ACTIONS) { Write-Output "::notice title=Tray check::$result" }
     if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $result }

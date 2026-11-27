@@ -68,7 +68,16 @@ fn request(app: &AppHandle, online: bool) {
                 reopen_after: false,
             };
             drop(transition);
-            if let Err(error) = window.destroy() {
+            // Windows destroys any HMENU still attached to a destroyed HWND.
+            // Detach the shared app menu so the next window can use it again.
+            let result = window.remove_menu().and_then(|menu| {
+                window.destroy().inspect_err(|_| {
+                    if let Some(menu) = menu {
+                        let _ = window.set_menu(menu);
+                    }
+                })
+            });
+            if let Err(error) = result {
                 *state.0.lock().unwrap() = Transition::Ready;
                 eprintln!("无法卸载 Oopz 网页：{error}");
             }
