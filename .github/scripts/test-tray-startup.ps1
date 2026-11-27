@@ -18,21 +18,50 @@ if ($sessionId -eq 0 -or -not [Environment]::UserInteractive -or -not $explorer)
     return
 }
 
+# The MSVC executable uses the system Evergreen WebView2 Runtime.
+$clientKey = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+function Get-RuntimeVersion {
+    foreach ($key in @("HKLM:\SOFTWARE\WOW6432Node\$clientKey", "HKCU:\Software\$clientKey")) {
+        $value = Get-ItemPropertyValue -LiteralPath $key -Name pv -ErrorAction SilentlyContinue
+        if ($value -and [version]$value -gt [version]'0.0.0.0') { return $value }
+    }
+}
+$runtimeVersion = Get-RuntimeVersion
+if (-not $runtimeVersion -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted') {
+    $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+    Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+    $signature = Get-AuthenticodeSignature -FilePath $installer
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+        throw 'WebView2 installer signature verification failed.'
+    }
+    $setup = Start-Process $installer -ArgumentList '/silent', '/install' -Wait -PassThru
+    $runtimeVersion = Get-RuntimeVersion
+    if (-not $runtimeVersion) { throw "WebView2 runtime setup failed with code $($setup.ExitCode)." }
+}
+if (-not $runtimeVersion) { throw 'This test needs the Microsoft Edge WebView2 Runtime.' }
+
 $profileDirectory = Join-Path ([IO.Path]::GetTempPath()) ("oopz-webview-test-" + [guid]::NewGuid())
 function Start-Oopz([switch] $TrayOnly) {
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $exe
     $info.WorkingDirectory = Split-Path -Parent $exe
     $info.UseShellExecute = $false
+    $info.RedirectStandardError = $true
     # A unique profile avoids sharing a WebView2 browser with another app.
     $info.Environment['WEBVIEW2_USER_DATA_FOLDER'] = $profileDirectory
     $info.Environment['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = '--proxy-server=http://127.0.0.1:9'
     if ($TrayOnly) { $info.ArgumentList.Add('--tray-only') }
-    [Diagnostics.Process]::Start($info)
+    $child = [Diagnostics.Process]::Start($info)
+    if ($TrayOnly) { $script:stderrRead = $child.StandardError.ReadToEndAsync() }
+    return $child
 }
 
 function Test-WebViewDescendant([int] $RootId) {
-    $processes = Get-CimInstance -ClassName Win32_Process -Filter "SessionId = $sessionId" -Property ProcessId, ParentProcessId, Name
+    $processes = Get-CimInstance -ClassName Win32_Process -Filter "SessionId = $sessionId" -Property ProcessId, ParentProcessId, Name, CommandLine
+    # WebView2 can also create its browser process through an OS broker.
+    foreach ($process in $processes) {
+        if ($process.Name -ieq 'msedgewebview2.exe' -and $process.CommandLine -like "*$profileDirectory*") { return $true }
+    }
     $tree = [Collections.Generic.HashSet[uint32]]::new()
     $null = $tree.Add($RootId)
     do {
@@ -103,7 +132,11 @@ function Wait-ForActivation($primary, $second) {
         if ($ready) { break }
         Start-Sleep -Milliseconds 400
     } while ($clock.Elapsed.TotalSeconds -lt 60)
-    if (-not $ready) { throw 'Timed out waiting for single-instance activation, a visible main window and a WebView2 descendant.' }
+    if (-not $ready) {
+        $browser = Test-WebViewDescendant $primary.Id
+        $window = [OopzMenu]::FindMainWindow($primary.Id)
+        throw "Activation timed out. SecondExited=$($second.HasExited), MenuWindow=$window, Browser=$browser, Title='$($primary.MainWindowTitle)', Runtime=$runtimeVersion."
+    }
 }
 
 $primary = $null
@@ -125,6 +158,7 @@ try {
     $privateMiB = [math]::Round($primary.PrivateMemorySize64 / 1MB, 1)
     $result = "Tray-only startup after 8 seconds: no visible main window, no sampled WebView2 descendants, Oopz private memory $privateMiB MiB."
     Write-Output $result
+    if ($env:GITHUB_ACTIONS) { Write-Output "::notice title=Tray check::$result" }
     if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $result }
     $second = Start-Oopz
     Wait-ForActivation $primary $second
@@ -144,6 +178,7 @@ try {
     Wait-ForActivation $primary $second
     $result = 'Passed tray-only startup, activation, menu-driven unload and reactivation of the same Oopz process.'
     Write-Output $result
+    if ($env:GITHUB_ACTIONS) { Write-Output "::notice title=Tray check::$result" }
     if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $result }
 } catch {
     if ($env:GITHUB_ACTIONS) {
@@ -164,6 +199,16 @@ try {
             if (-not $process.HasExited) { Write-Warning "Could not stop test process $($process.Id): $_" }
         } finally {
             $process.Dispose()
+        }
+    }
+    if ($null -ne $script:stderrRead -and $script:stderrRead.IsCompletedSuccessfully) {
+        $diagnostic = $script:stderrRead.Result.Trim()
+        if ($diagnostic) {
+            Write-Output $diagnostic
+            if ($env:GITHUB_ACTIONS) {
+                $snippet = $diagnostic.Substring(0, [math]::Min(600, $diagnostic.Length))
+                Write-Output ("::notice title=Oopz process diagnostic::" + $snippet.Replace('%','%25').Replace("`n",'%0A').Replace("`r",'%0D'))
+            }
         }
     }
     if (Test-Path -LiteralPath $profileDirectory) {
