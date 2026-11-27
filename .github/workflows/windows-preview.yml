@@ -1,0 +1,44 @@
+name: Windows preview
+on:
+  push:
+    branches: ['preview/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: rustup default stable-x86_64-pc-windows-msvc
+      - run: npm ci
+      - run: node --test "tests/*.test.mjs"
+      - run: npm run tauri build -- --ci --no-bundle -- --locked
+      - name: Check tray startup and activation
+        shell: pwsh
+        run: ./.github/scripts/test-tray-startup.ps1 -ExePath ./src-tauri/target/release/oopz.exe -SkipIfNoDesktop
+      - name: Collect portable files
+        shell: pwsh
+        run: |
+          New-Item -Type Directory preview-package
+          Copy-Item src-tauri/target/release/oopz.exe, LICENSE preview-package
+          if (Test-Path src-tauri/target/release/WebView2Loader.dll) {
+            Copy-Item src-tauri/target/release/WebView2Loader.dll preview-package
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Oopz-Windows-x64-preview
+          path: preview-package/
+          if-no-files-found: error

@@ -109,6 +109,11 @@ jobs:
       - name: Build NSIS and MSI installers
         run: npm run tauri build -- --ci --bundles nsis,msi -- --locked
 
+      - name: Check tray-only startup and single-instance activation
+        if: hashFiles('.github/scripts/test-tray-startup.ps1') != ''
+        shell: pwsh
+        run: ./.github/scripts/test-tray-startup.ps1 -ExePath ./src-tauri/target/release/oopz.exe -SkipIfNoDesktop
+
       - name: Collect installers and create portable ZIP
         shell: python
         run: |
