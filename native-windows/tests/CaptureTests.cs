@@ -41,11 +41,28 @@ public static class CaptureTests
         if (!condition) throw new Exception(explanation);
     }
 
+    public static int Main()
+    {
+        try
+        {
+            Run();
+            Console.WriteLine("Oopz capture parser tests passed.");
+            return 0;
+        }
+        catch (Exception error)
+        {
+            var cause = error.GetBaseException();
+            Console.WriteLine(cause.GetType().FullName + ": " + cause.Message);
+            Console.WriteLine(error.StackTrace);
+            return 1;
+        }
+    }
+
     public static void Run()
     {
         var grouped = new[] { new { name = "分组", channels = new[] { new { id = "chat", name = "聊天", type = "TEXT" } } } };
         var first = new { status = true, code = "200", data = new { messages = new object[] {
-            new { messageId = "m1", person = "sender", text = "第一条", timestamp = "1700000000000000" },
+            new { messageId = "m1", person = "sender", text = "第一条", timestamp = "1700000000000321" },
             new { messageId = 123, content = "第二条", timestamp = 1700000001000L },
             new { messageId = "wrong", area = "elsewhere", text = "越过请求范围" }
         }}};
@@ -72,7 +89,7 @@ public static class CaptureTests
         Assert(channel.Group == "分组" && channel.Name == "聊天" && channel.Type == "TEXT", "A partial channel did not acquire its metadata.");
         Assert(channel.Messages.Count == 2 && !data.Areas[1].Channels.Single().Messages.Any(), "Channel isolation or pagination deduplication failed.");
         var message = channel.Messages.Single(m => m.Id == "m1");
-        Assert(message.Author == "sender" && message.Text == "第一条" && message.Timestamp.Value.ToUnixTimeSeconds() == 1700000000, "Message parsing failed.");
+        Assert(message.Author == "sender" && message.Text == "第一条" && message.Timestamp.Value.ToUnixTimeSeconds() == 1700000000 && message.Timestamp.Value.Ticks % 10000 == 3210, "Message parsing failed.");
         Assert(channel.Messages.Single(m => m.Id == "123").Text == "［消息已撤回］", "A recalled body reappeared.");
         Assert(Import(Entry(Host + Areas, new { status = true, data = empty })).Areas.Count == 0, "A successful empty list should be valid.");
 

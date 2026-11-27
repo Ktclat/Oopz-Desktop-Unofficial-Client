@@ -81,6 +81,7 @@ try {
     if ($sent.group_id -ne 100 -or $sent.message -cne $outgoing -or $sent.auto_escape -ne $true) {
         throw 'Message payload did not match the selected channel and plain text.'
     }
+    Wait-ForText 'Timeline' $outgoing
     Invoke-Button 'ConnectButton'
     $null = Wait-For 'disconnection' {
         $button = Find-Control 'ConnectButton'

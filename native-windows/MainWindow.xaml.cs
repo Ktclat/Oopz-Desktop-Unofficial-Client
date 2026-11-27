@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Threading;
 using Microsoft.Win32;
 
 namespace Oopz.Native
@@ -21,6 +20,7 @@ namespace Oopz.Native
         string account;
         int port = 6700;
         bool online, sending, changingChannel, importing, closing;
+        bool followNewest = true;
 
         public MainWindow()
         {
@@ -179,6 +179,7 @@ namespace Oopz.Native
         {
             if (selected != null) selected.Draft = Composer.Text;
             selected = channel;
+            followNewest = true;
             Timeline.ItemsSource = channel == null ? null : channel.Lines;
             changingChannel = true;
             Composer.Text = channel == null ? "" : channel.Draft ?? "";
@@ -187,6 +188,13 @@ namespace Oopz.Native
             if (channel != null && channel.Lines.Count > 0) Timeline.ScrollIntoView(channel.Lines[channel.Lines.Count-1]);
             UpdateEmpty();
             UpdateComposer();
+        }
+        void Timeline_Scrolled(object sender, ScrollChangedEventArgs args)
+        {
+            var view = args.OriginalSource as ScrollViewer;
+            if (view == null) return;
+            if (args.ExtentHeightChange == 0) followNewest = view.VerticalOffset >= view.ScrollableHeight - 0.5;
+            else if (followNewest) view.ScrollToEnd();
         }
         void UpdateEmpty()
         {

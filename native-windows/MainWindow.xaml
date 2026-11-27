@@ -63,7 +63,7 @@
        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
        <TextBlock x:Name="RoomTitle" Text="消息" FontSize="21" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
        <Grid Grid.Row="1" Margin="0,10">
-         <ListBox x:Name="Timeline" AutomationProperties.AutomationId="Timeline" AutomationProperties.Name="消息记录">
+         <ListBox x:Name="Timeline" AutomationProperties.AutomationId="Timeline" AutomationProperties.Name="消息记录" ScrollViewer.ScrollChanged="Timeline_Scrolled">
            <ListBox.ItemTemplate><DataTemplate>
              <StackPanel><StackPanel Orientation="Horizontal">
                <TextBlock Text="{Binding Author}" Foreground="#C9C5FF" FontWeight="SemiBold"/>

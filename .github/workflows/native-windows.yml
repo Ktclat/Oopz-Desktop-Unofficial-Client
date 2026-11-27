@@ -24,9 +24,6 @@ jobs:
       - uses: microsoft/setup-msbuild@v2
       - name: Build native Windows client
         run: msbuild native-windows/Oopz.Native.csproj /t:Build /p:Configuration=Release /m /nologo
-      - name: Check capture parser
-        shell: powershell
-        run: ./native-windows/tests/test-capture.ps1 -AssemblyPath ./native-windows/bin/Release/Oopz.Native.exe
       - name: Verify native prerelease version and notes
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
@@ -41,6 +38,7 @@ jobs:
           if ($actual -cne $expected) { throw "Executable product version $actual differs from tag $expected." }
           if (-not (Get-Content -LiteralPath "releases/$env:TAG.md" -Raw).Trim()) { throw 'Missing prerelease notes.' }
       - name: Collect portable files
+        id: package
         shell: pwsh
         run: |
           $out = New-Item -ItemType Directory (Join-Path $env:RUNNER_TEMP 'native-package')
@@ -49,7 +47,11 @@ jobs:
           if (Test-Path -LiteralPath "$exe.config") {
             Copy-Item -LiteralPath "$exe.config" -Destination $out
           }
+      - name: Check capture parser
+        shell: powershell
+        run: ./native-windows/tests/test-capture.ps1 -AssemblyPath ./native-windows/bin/Release/Oopz.Native.exe
       - name: Check packaged desktop client
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: powershell
         run: ./.github/scripts/test-native-windows.ps1 -ExePath (Join-Path $env:RUNNER_TEMP 'native-package/Oopz.Native.exe')
       - uses: actions/upload-artifact@v6

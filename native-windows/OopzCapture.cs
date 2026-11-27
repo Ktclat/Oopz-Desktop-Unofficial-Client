@@ -354,10 +354,15 @@ namespace Oopz.Native
             long value;
             if (!long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out value) || value <= 0) return null;
             // Observed history uses milliseconds or microseconds; some exports use Unix seconds.
-            if (value >= 100000000000000L) value /= 1000;
+            long subMillisecondTicks = 0;
+            if (value >= 100000000000000L)
+            {
+                subMillisecondTicks = (value % 1000) * 10;
+                value /= 1000;
+            }
             else if (value < 10000000000L) value *= 1000;
             if (value > 253402300799999L) return null;
-            return DateTimeOffset.FromUnixTimeMilliseconds(value);
+            return DateTimeOffset.FromUnixTimeMilliseconds(value).AddTicks(subMillisecondTicks);
         }
     }
 }

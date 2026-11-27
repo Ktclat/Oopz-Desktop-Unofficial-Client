@@ -113,6 +113,12 @@ try {
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
     if (-not $app.WaitForExit(10000) -or $app.ExitCode -ne 0) { throw 'The native client did not close cleanly.' }
     Write-Output 'Main window, native microphone dialog and clean exit passed. No browser modules or descendant processes were observed.'
+} catch {
+    if ($env:GITHUB_ACTIONS) {
+        $detail = ($_.Exception.Message + ' at ' + $_.InvocationInfo.PositionMessage).Trim()
+        Write-Output ("::error title=Native desktop smoke::" + $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A'))
+    }
+    throw
 } finally {
     if (-not $app.HasExited) { $app.Kill() }
     $app.Dispose()
