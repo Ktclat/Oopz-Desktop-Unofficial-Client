@@ -110,6 +110,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let reload = MenuItem::with_id(app, RELOAD, "重新加载", true, Some("CmdOrCtrl+R"))?;
     let quit = MenuItem::with_id(app, QUIT, "退出 Oopz", true, Some("CmdOrCtrl+Q"))?;
     let app_menu = Submenu::with_items(app, "Oopz", true, &[&reload, &quit])?;
+    #[cfg(target_os = "windows")]
+    {
+        let unload =
+            MenuItem::with_id(app, "unload-page", "断开会话并卸载网页", true, None::<&str>)?;
+        app_menu.insert(&unload, 1)?;
+    }
 
     let choose = MenuItem::with_id(app, "choose-image", "选择要隐藏的图片…", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset-images", "恢复已隐藏的图片", true, None::<&str>)?;
